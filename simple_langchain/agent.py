@@ -6,7 +6,7 @@ from bedrock_agentcore.runtime import BedrockAgentCoreApp
 
 app = BedrockAgentCoreApp()
 
-class MyAgent:
+class SimpleLangchainAgent:
 
     def __init__(self):
         self.llm = ChatBedrockConverse(model="us.amazon.nova-pro-v1:0", region_name="us-east-1")
@@ -27,7 +27,7 @@ class MyAgent:
 
 @app.entrypoint
 def agent_entrypoint(payload, context):
-    agent = MyAgent()
+    agent = SimpleLangchainAgent()
     return agent.invoke(payload["message"])
 
 

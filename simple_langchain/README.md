@@ -14,6 +14,7 @@ This project shows how to:
 
 - Python 3.13+
 - [uv](https://docs.astral.sh/uv/) installed
+- Docker installed
 - AWS credentials configured (`aws configure` or SSO login)
 - Amazon Bedrock model access enabled for `amazon.nova-pro-v1` in `us-east-1`
 
@@ -25,7 +26,7 @@ Install dependencies:
 uv sync
 ```
 
-## Running
+## Running Locally (without Docker)
 
 **Interactive mode** — chat with the agent in a loop; type `exit` to quit:
 
@@ -42,7 +43,7 @@ uv run agent.py
 This starts a local server on `http://localhost:8080` with `/invocations` and `/ping` routes (provided by `BedrockAgentCoreApp.run()`). In another terminal, send a test request:
 
 ```bash
-./test_local.sh
+./scripts/test_local.sh
 ```
 
 or manually:
@@ -50,6 +51,43 @@ or manually:
 ```bash
 curl -X POST http://localhost:8080/invocations -H "Content-Type: application/json" -d '{"message": "What is the capital of France?"}'
 ```
+
+## Docker
+
+### Build locally
+
+Builds a multi-platform image (`linux/amd64` and `linux/arm64`) tagged with both `latest` and the current git commit SHA:
+
+```bash
+./scripts/build_docker_local.sh
+```
+
+### Run locally
+
+Starts the agent server in Docker on `http://localhost:8080`, passing your AWS credentials from the `rwuniard` profile:
+
+```bash
+./scripts/run_docker.sh
+```
+
+Then test it:
+
+```bash
+./scripts/test_local.sh
+```
+
+### Build and push to ECR
+
+Builds a `linux/arm64` image and pushes it directly to ECR (does not load into local Docker). Requires ECR repository `rw/simple_langchain_agent` to exist in your account:
+
+```bash
+./scripts/build_push_ecr.sh
+```
+
+This script:
+1. Resolves your AWS account ID via `sts get-caller-identity`
+2. Authenticates Docker with ECR
+3. Builds and pushes the image tagged `latest` and the current git commit SHA
 
 ## AWS Credentials
 
