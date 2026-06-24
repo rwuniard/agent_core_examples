@@ -1,23 +1,35 @@
-FROM python:3.13-slim
+FROM python:3.13-slim AS builder
 
-# Set working directory
 WORKDIR /app
 
-# Install uv
-RUN pip install uv
+RUN pip install --no-cache-dir uv
 
-# Copy project files    
-# Lock file is required for uv to install the exact same dependencies
-COPY pyproject.toml uv.lock ./  
-# Copy main agent file
+COPY pyproject.toml uv.lock ./
+
+# Install dependencies into .venv, no cache
+RUN uv sync --no-dev --no-cache
+
+
+FROM python:3.13-slim
+
+WORKDIR /app
+
+# Copy only the built venv and agent from the builder stage
+COPY --from=builder /app/.venv /app/.venv
 COPY agent.py ./
 
-# Install dependencies and create a non-root user
-RUN uv sync --no-dev && useradd --create-home appuser
+RUN useradd --create-home appuser
 USER appuser
 
-# Expose port 8080
+# OpenTelemetry configuration
+# AgentCore Runtime automatically injects the OTLP collector endpoint and OTEL env vars.
+# When running outside AgentCore (e.g. plain ECS), set OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+# to point to your ADOT collector (e.g. http://localhost:4317 for a sidecar).
+ENV OTEL_SERVICE_NAME=simple-langchain-agent
+
+# Add venv to PATH so opentelemetry-instrument and python are found directly
+ENV PATH="/app/.venv/bin:$PATH"
+
 EXPOSE 8080
 
-# Run the agent
-CMD ["uv", "run", "agent.py"]
+CMD ["opentelemetry-instrument", "python", "agent.py"]
