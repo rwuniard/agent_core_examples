@@ -1,0 +1,1 @@
+agentcore create --name MyAgent --framework LangChain_LangGraph --model-provider Bedrock --memory none --build CodeZip
