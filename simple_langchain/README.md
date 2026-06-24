@@ -10,6 +10,32 @@ This project shows how to:
 - Create a reusable agent class without Pydantic overhead
 - Invoke the agent with a user message and retrieve the response
 
+## Architecture
+
+```
+User (Postman / curl)
+        │
+        │  POST { "message": "..." }
+        ▼
+  API Gateway (REST API)
+        │
+        │  invokes
+        ▼
+  Lambda Function (boto3)
+        │
+        │  invoke_agent_runtime()
+        ▼
+  AgentCore Runtime
+        │
+        │  LangChain + ChatBedrockConverse
+        ▼
+  Amazon Bedrock (Nova Pro)
+```
+
+- **API Gateway** exposes a public HTTPS endpoint and forwards POST requests to Lambda
+- **Lambda** receives the request and calls the AgentCore runtime using `boto3`. It requires an IAM role with permission to invoke the AgentCore agent
+- **AgentCore Runtime** runs the containerized agent (this image), processes the message through LangChain and Bedrock, and returns the response
+
 ## Prerequisites
 
 - Python 3.13+
@@ -159,6 +185,76 @@ Only static values are set in the Dockerfile. All runtime-specific OTEL variable
 | `OTEL_SERVICE_NAME` | `simple-langchain-agent` | Service name shown in traces |
 
 `OTEL_PROPAGATORS` is intentionally not set in the Dockerfile — AgentCore injects it automatically at deploy time. Setting it in the image would cause a startup error if the corresponding propagator package entry point isn't resolvable in that environment.
+
+## Lambda Function
+
+The `lambda_function/lambda_function.py` file contains the Lambda handler that sits between API Gateway and AgentCore Runtime.
+
+**What it does:**
+
+- Reads the `message` field from the API Gateway event
+- Generates a unique `runtimeSessionId` per invocation
+- Constructs a forced-sampling X-Ray trace ID (`Sampled=1`) — this is necessary because Lambda propagates `Sampled=0` by default, which suppresses AgentCore spans in CloudWatch
+- Calls `boto3` `invoke_agent_runtime()` with the AgentCore runtime ARN, session ID, and payload
+- Returns the agent response with CORS headers
+
+**Key configuration in `lambda_function.py`:**
+
+- `agentRuntimeArn` — update this to your AgentCore runtime ARN after deployment
+- `qualifier` — the endpoint name in AgentCore Runtime (defaults to `DEFAULT`); find it in the AgentCore Runtime console
+- `AWS_REGION` — set this as a Lambda environment variable
+
+**Required environment variables (set in Lambda console):**
+
+| Variable | Description |
+|---|---|
+| `AWS_REGION` | Region where AgentCore is deployed (e.g. `us-east-1`) |
+
+## API Gateway Setup
+
+### Lambda IAM Role
+
+Before creating the Lambda function, ensure its execution role has permission to invoke the AgentCore agent:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": "bedrock-agentcore:InvokeAgentRuntime",
+  "Resource": "arn:aws:bedrock-agentcore:<region>:<account-id>:runtime/<agent-id>"
+}
+```
+
+### Create the API
+
+1. Go to **API Gateway** in the AWS Console
+2. Click **Create API** → select **REST API** → **New API**
+3. Enter an API name and click **Create API**
+
+### Create a resource and method
+
+4. Click **Create resource** → enter a resource name (e.g. `/chat`) → enable CORS if needed → click **Create resource**
+5. With the resource selected, click **Create method**
+   - Method type: **POST**
+   - Integration type: **Lambda function**
+   - Select your Lambda function
+   - Click **Create method**
+
+### Deploy
+
+6. Click **Deploy API** → select **\*New Stage\*** → enter a stage name (e.g. `prod`) → click **Deploy**
+7. Navigate to the **POST** method → copy the **Invoke URL**
+
+### Test
+
+Use the Invoke URL in Postman or curl:
+
+```bash
+curl -X POST <invoke-url> \
+  -H "Content-Type: application/json" \
+  -d '{"message": "What is the capital of Canada?"}'
+```
+
+Or in Postman: create a **POST** request to the Invoke URL with the JSON body above.
 
 ## AWS Credentials
 
