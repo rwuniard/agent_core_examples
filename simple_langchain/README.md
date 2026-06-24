@@ -54,6 +54,15 @@ curl -X POST http://localhost:8080/invocations -H "Content-Type: application/jso
 
 ## Docker
 
+### Multi-stage build
+
+The Dockerfile uses a **multi-stage build** to keep the final production image as small as possible:
+
+- **`builder` stage** — installs `uv` and resolves all Python dependencies into a `.venv`. This stage is only used during the build and is discarded afterwards. It is never shipped.
+- **Runtime stage** — starts from a clean `python:3.13-slim` base and copies only the pre-built `.venv` and `agent.py` from the builder. No build tools (`uv`, `pip` cache, etc.) are included.
+
+This removes ~80-100MB of build-time tooling from the final image.
+
 ### Build locally
 
 Builds a multi-platform image (`linux/amd64` and `linux/arm64`) tagged with both `latest` and the current git commit SHA:
