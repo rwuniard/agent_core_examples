@@ -27,16 +27,28 @@ uv sync
 
 ## Running
 
-**Single query** — runs the agent with a hardcoded question and prints the response:
+**Interactive mode** — chat with the agent in a loop; type `exit` to quit:
+
+```bash
+uv run main.py
+```
+
+**Local AgentCore server** — runs the agent behind the same HTTP interface AgentCore uses in the cloud, without needing `agentcore create`/`configure`:
 
 ```bash
 uv run agent.py
 ```
 
-**Interactive mode** — chat with the agent in a loop; type `exit` to quit:
+This starts a local server on `http://localhost:8080` with `/invocations` and `/ping` routes (provided by `BedrockAgentCoreApp.run()`). In another terminal, send a test request:
 
 ```bash
-uv run main.py
+./test_local.sh
+```
+
+or manually:
+
+```bash
+curl -X POST http://localhost:8080/invocations -H "Content-Type: application/json" -d '{"message": "What is the capital of France?"}'
 ```
 
 ## AWS Credentials

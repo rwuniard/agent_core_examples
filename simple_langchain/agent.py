@@ -1,6 +1,10 @@
 from langchain.agents import create_agent
 from langchain_aws import ChatBedrockConverse
 
+# Bedrock AgentCore App
+from bedrock_agentcore.runtime import BedrockAgentCoreApp
+
+app = BedrockAgentCoreApp()
 
 class MyAgent:
 
@@ -21,7 +25,11 @@ class MyAgent:
         result = self.agent.invoke(messages)
         return result["messages"][-1].content
 
+@app.entrypoint
+def agent_entrypoint(payload, context):
+    agent = MyAgent()
+    return agent.invoke(payload["message"])
+
 
 if __name__ == "__main__":
-    agent = MyAgent()
-    print(agent.invoke("What is the capital of France?"))
+    app.run()
