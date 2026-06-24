@@ -12,8 +12,9 @@ COPY pyproject.toml uv.lock ./
 # Copy main agent file
 COPY agent.py ./
 
-# Install dependencies
-RUN uv sync --no-dev
+# Install dependencies and create a non-root user
+RUN uv sync --no-dev && useradd --create-home appuser
+USER appuser
 
 # Expose port 8080
 EXPOSE 8080
