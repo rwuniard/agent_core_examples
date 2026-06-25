@@ -25,9 +25,20 @@ def _sampled_trace_id() -> str:
 # Lambda handler -> This is to invoke the AgentCore Runtime.
 def lambda_handler(event, context):
     user_input = event.get("message", "What is the capital of Canada?")
-    payload = json.dumps({"message": user_input})
 
-    session_id = f"lambda_session_{str(uuid.uuid4()).replace('-', '')}"
+    # Reuse the session_id from the request to maintain conversation history.
+    # If not provided, generate a new one (starts a fresh conversation thread).
+    session_id = event.get("session_id") or str(uuid.uuid4())
+
+    # actor_id identifies the user across sessions for long-term memory.
+    # The client should send a stable user identifier (e.g. a user ID or email).
+    actor_id = event.get("actor_id", "default-actor")
+
+    payload = json.dumps({
+        "message": user_input,
+        "session_id": session_id,
+        "actor_id": actor_id,
+    })
 
     # Lambda often propagates Sampled=0, which suppresses AgentCore spans.
     # See: https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-troubleshooting.html#troubleshoot-runtime-lambda-missing-spans

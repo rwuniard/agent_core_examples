@@ -35,6 +35,7 @@ User (Postman / curl)
 - **API Gateway** exposes a public HTTPS endpoint and forwards POST requests to Lambda
 - **Lambda** receives the request and calls the AgentCore runtime using `boto3`. It requires an IAM role with permission to invoke the AgentCore agent
 - **AgentCore Runtime** runs the containerized agent (this image), processes the message through LangChain and Bedrock, and returns the response
+- **AgentCore Memory** stores conversation history per `actor_id` / `session_id` combination, persisting state across container restarts and sessions
 
 ## Prerequisites
 
@@ -124,6 +125,79 @@ This script:
 2. Authenticates Docker with ECR
 3. Builds and pushes the image tagged `latest` and the current git commit SHA
 
+## Deploying to AgentCore Runtime
+
+### Redeploy after a code change
+
+After pushing a new image to ECR, update the running runtime:
+
+```bash
+# 1. Push the new image
+./scripts/build_push_ecr.sh
+
+# 2. Roll out the new image to AgentCore Runtime
+uv run python scripts/deploy.py
+```
+
+The script reads the runtime ID from `scripts/agentcore_deploy.cfg` and falls back to looking up the runtime by name. The DEFAULT endpoint ARN stays the same across redeploys — no Lambda reconfiguration needed.
+
+### First-time deploy (without the agentcore CLI)
+
+If you need to create the runtime from scratch without using the `agentcore` CLI, run:
+
+```bash
+uv run python scripts/deploy.py --create
+```
+
+Requires `AGENTCORE_MEMORY_ID` to be set in `.env` and the ECR image to already be pushed. Saves the new runtime ID and ARN to `scripts/agentcore_deploy.cfg`.
+
+### What deploy does under the hood
+
+```
+build_push_ecr.sh              deploy.py (redeploy)
+       │                               │
+       ▼                               ▼
+ECR image :latest      update_agent_runtime(containerUri=ECR:latest)
+                                       │
+                                       ▼
+                           AgentCore pulls new image
+                           spins up new container
+                           waits for READY (~1-2 min)
+                                       │
+                                       ▼
+                           DEFAULT endpoint stays live
+                           (zero-downtime swap)
+```
+
+### Checking runtime status
+
+```bash
+aws bedrock-agentcore-control get-agent-runtime \
+  --agent-runtime-id <AGENT_RUNTIME_ID> \
+  --region us-east-1
+```
+
+### Configuration files
+
+| File | Purpose |
+|---|---|
+| `.env` | Agent runtime config — `AGENTCORE_MEMORY_ID` (loaded by `agent.py`) |
+| `scripts/agentcore_deploy.cfg` | Deployment state — written by `--create`, read by redeploy |
+
+**`.env` keys used by deploy:**
+
+| Variable | Description |
+|---|---|
+| `AGENTCORE_MEMORY_ID` | Required for `--create` — passed to the runtime as an env var |
+| `AGENT_RUNTIME_ROLE_ARN` | Optional — IAM role for the runtime (defaults to the service default role) |
+
+**`agentcore_deploy.cfg` keys (written automatically):**
+
+| Key | Description |
+|---|---|
+| `agent_runtime_id` | Runtime ID — used by redeploy to target the right runtime |
+| `agent_runtime_arn` | Runtime ARN — needed in Lambda for `invoke_agent_runtime` |
+
 ## Observability (OpenTelemetry + X-Ray)
 
 The Docker image uses [AWS Distro for OpenTelemetry (ADOT)](https://aws-otel.github.io/) for zero-code-change auto-instrumentation. The `opentelemetry-instrument` launcher automatically traces LangChain chains and Bedrock API calls at startup — no changes to `agent.py` needed.
@@ -186,14 +260,68 @@ Only static values are set in the Dockerfile. All runtime-specific OTEL variable
 
 `OTEL_PROPAGATORS` is intentionally not set in the Dockerfile — AgentCore injects it automatically at deploy time. Setting it in the image would cause a startup error if the corresponding propagator package entry point isn't resolvable in that environment.
 
+## Memory
+
+The agent uses `AgentCoreMemorySaver` from `langgraph-checkpoint-aws` as its LangGraph checkpointer. This persists full conversation state (messages, graph execution state) to AgentCore Memory — surviving container restarts and cold starts.
+
+### How conversation identity works
+
+Every request carries two identifiers:
+
+| Field | Meaning | Example |
+|---|---|---|
+| `actor_id` | Who is talking — a stable user identifier | `user-ron-456` |
+| `session_id` | Which conversation — reuse to continue, new UUID to start fresh | `session-abc-123` |
+
+The same `actor_id` + same `session_id` = resumes the existing conversation thread.
+The same `actor_id` + new `session_id` = new conversation, but long-term memory (preferences, facts) is shared across sessions.
+
+### Request body
+
+All three fields can be sent from the client:
+
+```json
+{
+  "message": "What did I tell you my name was?",
+  "session_id": "session-abc-123",
+  "actor_id": "user-ron-456"
+}
+```
+
+- **`session_id`** — if omitted, Lambda generates a new UUID (fresh conversation)
+- **`actor_id`** — if omitted, defaults to `"default-actor"`
+
+### Required setup
+
+1. Create an **AgentCore Memory** resource in the AWS console
+2. Set the `AGENTCORE_MEMORY_ID` environment variable in both the AgentCore Runtime and Lambda configurations
+3. Add the following minimum IAM policy statement to the AgentCore Runtime role (e.g. `AmazonBedrockAgentCoreRuntimeExecutionPolicy_*`):
+
+```json
+{
+  "Sid": "AgentCoreMemoryAccess",
+  "Effect": "Allow",
+  "Action": [
+    "bedrock-agentcore:CreateEvent",
+    "bedrock-agentcore:ListEvents",
+    "bedrock-agentcore:DeleteEvent"
+  ],
+  "Resource": "arn:aws:bedrock-agentcore:<region>:<account-id>:memory/<memory-id>"
+}
+```
+
+`DeleteEvent` is only exercised if you call `delete_thread()` to clear a session. If you later add long-term memory strategies, also add `bedrock-agentcore:RetrieveMemories` to the same statement.
+
+> **Avoid `BedrockAgentCoreFullAccess`** — it grants `bedrock-agentcore:*` on all resources in your account, which is far broader than needed.
+
 ## Lambda Function
 
 The `lambda_function/lambda_function.py` file contains the Lambda handler that sits between API Gateway and AgentCore Runtime.
 
 **What it does:**
 
-- Reads the `message` field from the API Gateway event
-- Generates a unique `runtimeSessionId` per invocation
+- Reads `message`, `session_id`, and `actor_id` from the API Gateway event
+- Reuses `session_id` if provided, or generates a new UUID for a fresh conversation
 - Constructs a forced-sampling X-Ray trace ID (`Sampled=1`) — this is necessary because Lambda propagates `Sampled=0` by default, which suppresses AgentCore spans in CloudWatch
 - Calls `boto3` `invoke_agent_runtime()` with the AgentCore runtime ARN, session ID, and payload
 - Returns the agent response with CORS headers
@@ -202,13 +330,13 @@ The `lambda_function/lambda_function.py` file contains the Lambda handler that s
 
 - `agentRuntimeArn` — update this to your AgentCore runtime ARN after deployment
 - `qualifier` — the endpoint name in AgentCore Runtime (defaults to `DEFAULT`); find it in the AgentCore Runtime console
-- `AWS_REGION` — set this as a Lambda environment variable
 
 **Required environment variables (set in Lambda console):**
 
 | Variable | Description |
 |---|---|
 | `AWS_REGION` | Region where AgentCore is deployed (e.g. `us-east-1`) |
+| `AGENTCORE_MEMORY_ID` | ID of the AgentCore Memory resource |
 
 ## API Gateway Setup
 
@@ -251,10 +379,10 @@ Use the Invoke URL in Postman or curl:
 ```bash
 curl -X POST <invoke-url> \
   -H "Content-Type: application/json" \
-  -d '{"message": "What is the capital of Canada?"}'
+  -d '{"message": "What is the capital of Canada?", "session_id": "session-abc-123", "actor_id": "user-ron-456"}'
 ```
 
-Or in Postman: create a **POST** request to the Invoke URL with the JSON body above.
+Or in Postman: create a **POST** request to the Invoke URL with the JSON body above. Save `session_id` as a Postman variable and reuse it across requests to maintain the same conversation thread.
 
 ## AWS Credentials
 

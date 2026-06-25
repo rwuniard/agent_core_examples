@@ -4,4 +4,5 @@ docker run -p 8080:8080 \
   -e AWS_SESSION_TOKEN=$(aws configure get aws_session_token --profile rwuniard) \
   -e AWS_DEFAULT_REGION=us-east-1 \
   -e OTEL_SDK_DISABLED=true \
+  --env-file ../.env \
   simple-langchain-agent:latest
