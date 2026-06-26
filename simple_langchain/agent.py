@@ -6,9 +6,13 @@ load_dotenv()  # loads .env for local dev; no-op when env vars are already set
 from langchain.agents import create_agent
 from langchain_aws import ChatBedrockConverse
 from langgraph_checkpoint_aws import AgentCoreMemorySaver
+from opentelemetry.instrumentation.langchain import LangchainInstrumentor
 
 # Bedrock AgentCore App
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
+
+# OpenTelemetry Instrumentation, so it will send Session, Traces, Spans to CloudWatch.
+LangchainInstrumentor().instrument()
 
 app = BedrockAgentCoreApp()
 

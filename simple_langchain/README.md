@@ -136,7 +136,7 @@ After pushing a new image to ECR, update the running runtime:
 ./scripts/build_push_ecr.sh
 
 # 2. Roll out the new image to AgentCore Runtime
-uv run python scripts/deploy.py
+uv run python scripts/agentcore_deploy.py
 ```
 
 The script reads the runtime ID from `scripts/agentcore_deploy.cfg` and falls back to looking up the runtime by name. The DEFAULT endpoint ARN stays the same across redeploys — no Lambda reconfiguration needed.
@@ -146,7 +146,7 @@ The script reads the runtime ID from `scripts/agentcore_deploy.cfg` and falls ba
 If you need to create the runtime from scratch without using the `agentcore` CLI, run:
 
 ```bash
-uv run python scripts/deploy.py --create
+uv run python scripts/agentcore_deploy.py --create
 ```
 
 Requires `AGENTCORE_MEMORY_ID` to be set in `.env` and the ECR image to already be pushed. Saves the new runtime ID and ARN to `scripts/agentcore_deploy.cfg`.
@@ -154,7 +154,7 @@ Requires `AGENTCORE_MEMORY_ID` to be set in `.env` and the ECR image to already 
 ### What deploy does under the hood
 
 ```
-build_push_ecr.sh              deploy.py (redeploy)
+build_push_ecr.sh              agentcore_deploy.py (redeploy)
        │                               │
        ▼                               ▼
 ECR image :latest      update_agent_runtime(containerUri=ECR:latest)

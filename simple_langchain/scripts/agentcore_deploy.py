@@ -2,10 +2,10 @@
 Deploy (or redeploy) the agent to AgentCore Runtime.
 
 First-time deploy:
-    uv run python scripts/deploy.py --create
+    uv run python scripts/agentcore_deploy.py --create
 
 Redeploy after pushing a new image:
-    uv run python scripts/deploy.py
+    uv run python scripts/agentcore_deploy.py
 
 Deployment state (AGENT_RUNTIME_ID, AGENT_RUNTIME_ARN) is stored in
 agentcore.cfg at the project root — separate from .env which is the
