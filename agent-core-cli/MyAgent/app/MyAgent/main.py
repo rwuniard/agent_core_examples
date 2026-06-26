@@ -1,7 +1,7 @@
 from typing import Any
 
 from langchain_core.messages import HumanMessage
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 from langchain.tools import tool
 from opentelemetry.instrumentation.langchain import LangchainInstrumentor
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
@@ -53,7 +53,7 @@ async def invoke(payload, context):
         mcp_tools = await mcp_client.get_tools()
 
     # Define the agent using create_react_agent
-    graph = create_react_agent(get_or_create_model(), tools=mcp_tools + tools, prompt=DEFAULT_SYSTEM_PROMPT)
+    graph = create_agent(get_or_create_model(), tools=mcp_tools + tools, system_prompt=DEFAULT_SYSTEM_PROMPT)
 
     # Process the user prompt
     prompt = payload.get("prompt", "What can you help me with?")
