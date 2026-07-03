@@ -8,6 +8,10 @@ from langchain.agents import create_agent
 from langchain_aws import ChatBedrockConverse
 from langgraph_checkpoint_aws import AgentCoreMemorySaver
 from opentelemetry.instrumentation.langchain import LangchainInstrumentor
+from langchain_tavily import TavilySearch
+from langchain.tools import tool
+from langchain_core.messages import AIMessageChunk
+from datetime import datetime
 
 # Bedrock AgentCore App
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
@@ -34,15 +38,23 @@ def _extract_text(content) -> str:
         )
     return ""
 
+@tool
+def get_current_date_and_time() -> str:
+    """Return the current date and time in YYYY-MM-DD HH:MM:SS format."""
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
 
 class SimpleLangchainAgent:
 
     def __init__(self):
         self.llm = ChatBedrockConverse(model="us.amazon.nova-pro-v1:0", region_name="us-east-1")
-        self.tools = []
+        self.tools = [TavilySearch(max_results=5), get_current_date_and_time]
         self.system_prompt = """
         You are a helpful assistant that can answer questions and help with tasks.
-        """
+        When you need up-to-date information, use the tavily_search tool to search the web.
+        When you need the current date or time, use the get_current_date_and_time tool.
+        Always cite sources when referencing search results."""
+
         # AgentCoreMemorySaver persists conversation state to AgentCore Memory,
         # surviving container restarts. Requires AGENTCORE_MEMORY_ID env var.
         checkpointer = AgentCoreMemorySaver(
@@ -96,6 +108,13 @@ class SimpleLangchainAgent:
         async for message_chunk, _metadata in self.agent.astream(
             messages, config=config, stream_mode="messages"
         ):
+        # stream_mode="messages" yields chunks from every message in the graph,
+            # not just text the model generated - including ToolMessage, which
+            # carries a tool's raw return value (e.g. tavily_search's full JSON
+            # response). Only AIMessageChunk is model-generated text; anything
+            # else must never reach the user.
+            if not isinstance(message_chunk, AIMessageChunk):
+                continue
             text = _extract_text(message_chunk.content)
             if text:
                 yield text

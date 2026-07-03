@@ -9,7 +9,7 @@ Redeploy after pushing a new image:
 
 Deployment state (AGENT_RUNTIME_ID, AGENT_RUNTIME_ARN) is stored in
 agentcore.cfg at the project root — separate from .env which is the
-agent's runtime config (AGENTCORE_MEMORY_ID etc.).
+agent's runtime config (AGENTCORE_MEMORY_ID, TAVILY_API_KEY, etc.).
 """
 
 import argparse
@@ -20,7 +20,7 @@ import sys
 import boto3
 from dotenv import load_dotenv
 
-# .env provides AGENTCORE_MEMORY_ID for --create
+# .env provides AGENTCORE_MEMORY_ID and TAVILY_API_KEY for --create / redeploy
 load_dotenv()
 
 PROJECT_ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -36,8 +36,27 @@ ROLE_ARN = os.environ.get(
     f"arn:aws:iam::{ACCOUNT_ID}:role/service-role/AmazonBedrockAgentCoreRuntimeDefaultServiceRole-uhxfs",
 )
 MEMORY_ID = os.environ.get("AGENTCORE_MEMORY_ID", "")
+TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "")
 
 CP = boto3.client("bedrock-agentcore-control", region_name=REGION)
+
+
+def runtime_env_vars() -> dict[str, str]:
+    return {
+        "AGENTCORE_MEMORY_ID": MEMORY_ID,
+        "TAVILY_API_KEY": TAVILY_API_KEY,
+    }
+
+
+def _require_runtime_env() -> None:
+    missing = []
+    if not MEMORY_ID:
+        missing.append("AGENTCORE_MEMORY_ID")
+    if not TAVILY_API_KEY:
+        missing.append("TAVILY_API_KEY")
+    if missing:
+        print(f"ERROR: {', '.join(missing)} must be set in .env before deploying")
+        sys.exit(1)
 
 
 # ── agentcore.cfg helpers ────────────────────────────────────────────────────
@@ -101,9 +120,7 @@ def wait_endpoint_ready(runtime_id: str, endpoint_name: str = "DEFAULT"):
 # ── deploy actions ───────────────────────────────────────────────────────────
 
 def create():
-    if not MEMORY_ID:
-        print("ERROR: AGENTCORE_MEMORY_ID must be set in .env before deploying")
-        sys.exit(1)
+    _require_runtime_env()
 
     print(f"Creating runtime '{RUNTIME_NAME}' with image:\n  {ECR_URI}\n")
 
@@ -114,7 +131,7 @@ def create():
         },
         roleArn=ROLE_ARN,
         networkConfiguration={"networkMode": "PUBLIC"},
-        environmentVariables={"AGENTCORE_MEMORY_ID": MEMORY_ID},
+        environmentVariables=runtime_env_vars(),
     )
     runtime_id = resp["agentRuntimeId"]
     runtime_arn = resp["agentRuntimeArn"]
@@ -131,14 +148,12 @@ def create():
     wait_endpoint_ready(runtime_id, "DEFAULT")
 
     write_cfg(runtime_id, runtime_arn)
-    print(f"\nDeploy complete.")
+    print("Deploy complete.")
     print(f"Update your Lambda with:\n  AGENT_RUNTIME_ARN = {runtime_arn}")
 
 
 def redeploy(runtime_id: str):
-    if not MEMORY_ID:
-        print("ERROR: AGENTCORE_MEMORY_ID must be set in .env before deploying")
-        sys.exit(1)
+    _require_runtime_env()
 
     print(f"Redeploying runtime '{runtime_id}' with image:\n  {ECR_URI}\n")
 
@@ -152,7 +167,7 @@ def redeploy(runtime_id: str):
         },
         roleArn=current["roleArn"],
         networkConfiguration=current["networkConfiguration"],
-        environmentVariables={"AGENTCORE_MEMORY_ID": MEMORY_ID},
+        environmentVariables=runtime_env_vars(),
     )
     wait_ready(runtime_id, "runtime")
     print(f"\nRedeploy complete. Runtime '{runtime_id}' is READY with the new image.")

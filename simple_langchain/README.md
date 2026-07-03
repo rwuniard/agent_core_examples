@@ -53,6 +53,22 @@ Install dependencies:
 uv sync
 ```
 
+### Web search (Tavily)
+
+The agent uses [Tavily](https://tavily.com/) for live web search via the `langchain-tavily` package. If you are setting up from scratch, add the dependency with:
+
+```bash
+uv add langchain-tavily
+```
+
+Then set your API key in `.env` (copy from `.env.example` if needed):
+
+```bash
+TAVILY_API_KEY=your-tavily-api-key-here
+```
+
+`agent.py` loads `.env` on startup for local dev. For AgentCore Runtime, add `TAVILY_API_KEY` as an environment variable on the deployed runtime (console or `agentcore_deploy.py --create` env config).
+
 ## Running Locally (without Docker)
 
 **Interactive mode** — chat with the agent in a loop; type `exit` to quit:
@@ -149,7 +165,7 @@ If you need to create the runtime from scratch without using the `agentcore` CLI
 uv run python scripts/agentcore_deploy.py --create
 ```
 
-Requires `AGENTCORE_MEMORY_ID` to be set in `.env` and the ECR image to already be pushed. Saves the new runtime ID and ARN to `scripts/agentcore_deploy.cfg`.
+Requires `AGENTCORE_MEMORY_ID` and `TAVILY_API_KEY` to be set in `.env` and the ECR image to already be pushed. Saves the new runtime ID and ARN to `scripts/agentcore_deploy.cfg`.
 
 ### What deploy does under the hood
 
@@ -181,7 +197,7 @@ aws bedrock-agentcore-control get-agent-runtime \
 
 | File | Purpose |
 |---|---|
-| `.env` | Agent runtime config — `AGENTCORE_MEMORY_ID` (loaded by `agent.py`) |
+| `.env` | Agent runtime config — `AGENTCORE_MEMORY_ID`, `TAVILY_API_KEY` (loaded by `agent.py`) |
 | `scripts/agentcore_deploy.cfg` | Deployment state — written by `--create`, read by redeploy |
 
 **`.env` keys used by deploy:**
@@ -189,6 +205,7 @@ aws bedrock-agentcore-control get-agent-runtime \
 | Variable | Description |
 |---|---|
 | `AGENTCORE_MEMORY_ID` | Required for `--create` — passed to the runtime as an env var |
+| `TAVILY_API_KEY` | Required for web search — Tavily API key for the `TavilySearch` tool |
 | `AGENT_RUNTIME_ROLE_ARN` | Optional — IAM role for the runtime (defaults to the service default role) |
 
 **`agentcore_deploy.cfg` keys (written automatically):**
