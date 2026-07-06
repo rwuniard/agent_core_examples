@@ -12,6 +12,7 @@ from langchain_tavily import TavilySearch
 from langchain.tools import tool
 from langchain_core.messages import AIMessageChunk
 from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # Bedrock AgentCore App
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
@@ -39,9 +40,22 @@ def _extract_text(content) -> str:
     return ""
 
 @tool
-def get_current_date_and_time() -> str:
-    """Return the current date and time in YYYY-MM-DD HH:MM:SS format."""
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+def get_current_date_and_time(timezone: str | None = None) -> str:
+    """Return the current date and time for an IANA timezone.
+
+    Args:
+        timezone: IANA timezone name (e.g. America/New_York, Europe/Amsterdam, Asia/Tokyo).
+                  If omitted, uses AGENT_TIMEZONE env var or UTC.
+    """
+    tz_name = timezone or os.environ.get("AGENT_TIMEZONE", "UTC")
+    try:
+        now = datetime.now(ZoneInfo(tz_name))
+    except ZoneInfoNotFoundError:
+        return (
+            f"Unknown timezone: {tz_name}. "
+            "Use an IANA name such as America/New_York, Europe/Amsterdam, or UTC."
+        )
+    return now.strftime(f"%Y-%m-%d %H:%M:%S %Z ({tz_name})")
 
 
 class SimpleLangchainAgent:
@@ -53,6 +67,7 @@ class SimpleLangchainAgent:
         You are a helpful assistant that can answer questions and help with tasks.
         When you need up-to-date information, use the tavily_search tool to search the web.
         When you need the current date or time, use the get_current_date_and_time tool.
+        Pass an IANA timezone when the user asks about a specific region (e.g. Europe/Amsterdam).
         Always cite sources when referencing search results."""
 
         # AgentCoreMemorySaver persists conversation state to AgentCore Memory,
