@@ -1,3 +1,4 @@
+import asyncio
 import os
 from typing import AsyncIterator
 
@@ -21,6 +22,12 @@ from bedrock_agentcore.runtime import BedrockAgentCoreApp
 LangchainInstrumentor().instrument()
 
 app = BedrockAgentCoreApp()
+
+# Off by default: the extra get_tuple() calls in _log_checkpoint_state are live
+# network round-trips to AgentCore Memory, on top of what the graph's own
+# checkpointer already does. Set DEBUG_CHECKPOINT_LOGGING=1 to enable them
+# when investigating a memory/recall issue.
+DEBUG_CHECKPOINT_LOGGING = os.environ.get("DEBUG_CHECKPOINT_LOGGING", "").lower() in ("1", "true", "yes")
 
 
 def _extract_text(content) -> str:
@@ -60,19 +67,26 @@ def get_current_date_and_time(timezone: str | None = None) -> str:
 
 class SimpleLangchainAgent:
 
-    def __init__(self):
-        self.llm = ChatBedrockConverse(model="us.amazon.nova-pro-v1:0", region_name="us-east-1")
+    def __init__(self, temperature: float | None = None):
+        self.llm = ChatBedrockConverse(
+            model="us.amazon.nova-pro-v1:0",
+            region_name="us-east-1",
+            temperature=temperature,
+        )
         self.tools = [TavilySearch(max_results=5), get_current_date_and_time]
         self.system_prompt = """
         You are a helpful assistant that can answer questions and help with tasks.
         When you need up-to-date information, use the tavily_search tool to search the web.
         When you need the current date or time, use the get_current_date_and_time tool.
         Pass an IANA timezone when the user asks about a specific region (e.g. Europe/Amsterdam).
-        Always cite sources when referencing search results."""
+        Always cite sources when referencing search results.
+        Information the user has shared about themselves earlier in this conversation
+        (e.g. their own name) is not third-party personal data - it's fine to reference
+        it directly when they ask you to recall it."""
 
         # AgentCoreMemorySaver persists conversation state to AgentCore Memory,
         # surviving container restarts. Requires AGENTCORE_MEMORY_ID env var.
-        checkpointer = AgentCoreMemorySaver(
+        self.checkpointer = AgentCoreMemorySaver(
             memory_id=os.environ["AGENTCORE_MEMORY_ID"],
             region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
         )
@@ -80,8 +94,34 @@ class SimpleLangchainAgent:
             model=self.llm,
             tools=self.tools,
             system_prompt=self.system_prompt,
-            checkpointer=checkpointer,
+            checkpointer=self.checkpointer,
         )
+
+    def _log_checkpoint_state(self, label: str, config: dict) -> None:
+        """Debug helper: read the checkpoint directly (bypassing the graph) and log
+        what AgentCoreMemorySaver actually has stored for this actor_id/thread_id.
+
+        Bypasses the graph so the read/write timing is visible independent of
+        whatever create_agent does internally with the same checkpointer.
+        """
+        keys = config["configurable"]
+        try:
+            tuple_ = self.checkpointer.get_tuple(config)
+        except Exception as exc:
+            print(f"[checkpoint:{label}] {keys} get_tuple FAILED: {exc!r}")
+            return
+        if tuple_ is None:
+            print(f"[checkpoint:{label}] {keys} -> no checkpoint found")
+            return
+        messages = tuple_.checkpoint.get("channel_values", {}).get("messages", [])
+        print(
+            f"[checkpoint:{label}] {keys} -> checkpoint_id={tuple_.checkpoint.get('id')!r} "
+            f"message_count={len(messages)}"
+        )
+        for i, msg in enumerate(messages):
+            role = getattr(msg, "type", type(msg).__name__)
+            content = _extract_text(getattr(msg, "content", "")) or str(getattr(msg, "content", ""))
+            print(f"[checkpoint:{label}]   [{i}] {role}: {content[:80]!r}")
 
     # sync entrypoint with invoke method. Blocking call.
     # The invoke method is less efficient than the invoke_async method because it blocks until the entire response is generated.
@@ -92,10 +132,14 @@ class SimpleLangchainAgent:
                 "thread_id": thread_id, # identifies the conversation session
             }
         }
+        if DEBUG_CHECKPOINT_LOGGING:
+            self._log_checkpoint_state("before-invoke", config)
         messages = {"messages": [{"role": "user", "content": user_message}]}
         result = self.agent.invoke(messages, config=config)
+        if DEBUG_CHECKPOINT_LOGGING:
+            self._log_checkpoint_state("after-invoke", config)
         return result["messages"][-1].content
-    
+
     # async entrypoint with invoke_async method. This is more efficient than the sync entrypoint with invoke method.
     # It blocks until the entire response is generated, then returns the final result.
     # The invoke_async method is more efficient than the invoke method because it doesn't block until the entire response is generated.
@@ -106,8 +150,12 @@ class SimpleLangchainAgent:
                 "thread_id": thread_id, # identifies the conversation session
             }
         }
+        if DEBUG_CHECKPOINT_LOGGING:
+            await asyncio.to_thread(self._log_checkpoint_state, "before-invoke", config)
         messages = {"messages": [{"role": "user", "content": user_message}]}
         result = await self.agent.ainvoke(messages, config=config)
+        if DEBUG_CHECKPOINT_LOGGING:
+            await asyncio.to_thread(self._log_checkpoint_state, "after-invoke", config)
         return result["messages"][-1].content
 
     # async entrypoint with astream method. Streams yielded chunks as SSE.
@@ -119,6 +167,8 @@ class SimpleLangchainAgent:
                 "thread_id": thread_id, # identifies the conversation session
             }
         }
+        if DEBUG_CHECKPOINT_LOGGING:
+            await asyncio.to_thread(self._log_checkpoint_state, "before-invoke", config)
         messages = {"messages": [{"role": "user", "content": user_message}]}
         async for message_chunk, _metadata in self.agent.astream(
             messages, config=config, stream_mode="messages"
@@ -133,6 +183,8 @@ class SimpleLangchainAgent:
             text = _extract_text(message_chunk.content)
             if text:
                 yield text
+        if DEBUG_CHECKPOINT_LOGGING:
+            await asyncio.to_thread(self._log_checkpoint_state, "after-invoke", config)
 
 # Create agent once at module level so the checkpointer connection is reused.
 agent = SimpleLangchainAgent()
